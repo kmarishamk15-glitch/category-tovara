@@ -7,7 +7,7 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 
-const CODE_VERSION = "2.3.0";
+const CODE_VERSION = "2.4.0";
 
 console.log("=".repeat(50));
 console.log(`Starting server v${CODE_VERSION}`);
@@ -155,14 +155,14 @@ app.post("/webhook", async (req, res) => {
 
     console.log(`🔄 Updating category: ${category} → ${correct}`);
 
-    // 🔥 ИСПРАВЛЕНИЕ: передаём value как ЧИСЛО, а не строку
+    // 🔥 ИСПРАВЛЕНИЕ: для полей-списков используем enum_id
     await axios.patch(
       url,
       {
         custom_fields_values: [
           {
             field_id: FIELD_CATEGORY,
-            values: [{ value: correct }]  // ✅ Число, не строка
+            values: [{ enum_id: correct }]  // ✅ enum_id вместо value
           }
         ]
       },
