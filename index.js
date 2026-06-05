@@ -4,7 +4,7 @@ const axios = require("axios");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ⚠️ ВАЖНО: middleware должен быть ПЕРЕД всеми роутами!
+// ⚠️ ВАЖНО: middleware ПЕРЕД роутами
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 
@@ -50,48 +50,59 @@ app.get("/", (req, res) => {
   res.send("OK");
 });
 
-// 🔄 Verification webhook от amoCRM (GET запрос)
 app.get("/webhook", (req, res) => {
   console.log("=== Verification GET webhook ===");
-  console.log("Query:", req.query);
-  console.log("Headers:", req.headers);
   return res.sendStatus(200);
 });
 
 app.post("/webhook", async (req, res) => {
   try {
     console.log("=== Webhook POST received ===");
-    console.log("Headers:", JSON.stringify(req.headers, null, 2));
-    console.log("Content-Type:", req.headers["content-type"]);
-    console.log("Body:", JSON.stringify(req.body, null, 2));
-    console.log("Raw body type:", typeof req.body);
 
-    // 🛡️ Если тело пустое — это verification webhook, просто отвечаем 200
+    // Пустое тело — verification
     if (!req.body || Object.keys(req.body).length === 0) {
-      console.log("Empty body — verification webhook, skipping");
+      console.log("Empty body — verification webhook");
       return res.sendStatus(200);
     }
 
-    // Ищем лид в разных форматах
-    let lead =
-      req.body?.leads?.update?.[0] ||
-      req.body?.leads?.add?.[0]    ||
-      req.body?.leads?.delete?.[0] ||
-      null;
-
-    // Если лид не в стандартном формате — может быть сам объект
-    if (!lead && req.body.id && req.body.custom_fields_values) {
-      lead = req.body;
-    }
+    // Ищем лид
+    const lead = req.body?.leads?.update?.[0] || req.body?.leads?.add?.[0];
 
     if (!lead || !lead.id) {
       console.log("Lead not found in payload");
-      console.log("Available keys:", Object.keys(req.body));
       return res.sendStatus(200);
     }
 
     const leadId = lead.id;
-    const custom = lead.custom_fields_values || [];
+    console.log(`Processing lead #${leadId}`);
+
+    const subdomain = process.env.AMO_SUBDOMAIN;
+    const token     = process.env.AMO_ACCESS_TOKEN;
+
+    if (!subdomain || !token) {
+      console.log("Missing env vars: AMO_SUBDOMAIN or AMO_ACCESS_TOKEN");
+      return res.sendStatus(200);
+    }
+
+    // 🔥 ПОЛУЧАЕМ ПОЛНУЮ СДЕЛКУ ЧЕРЕЗ API (с кастомными полями)
+    const url = `https://${subdomain}.amocrm.ru/api/v4/leads/${leadId}`;
+    
+    console.log(`Fetching lead details from ${url}`);
+    
+    const response = await axios.get(url, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json"
+      },
+      params: {
+        with: "custom_fields_values" // Запрашиваем кастомные поля
+      }
+    });
+
+    const fullLead = response.data;
+    const custom = fullLead.custom_fields_values || [];
+
+    console.log("Custom fields count:", custom.length);
 
     let type     = null;
     let model    = null;
@@ -119,17 +130,8 @@ app.post("/webhook", async (req, res) => {
 
     console.log(`Updating category: ${category} → ${correct}`);
 
-    const subdomain = process.env.AMO_SUBDOMAIN;
-    const token     = process.env.AMO_ACCESS_TOKEN;
-
-    if (!subdomain || !token) {
-      console.log("Missing env vars: AMO_SUBDOMAIN or AMO_ACCESS_TOKEN");
-      return res.sendStatus(200);
-    }
-
-    const url = `https://${subdomain}.amocrm.ru/api/v4/leads/${leadId}`;
-
-    const response = await axios.patch(
+    // Обновляем сделку
+    await axios.patch(
       url,
       {
         custom_fields_values: [
@@ -147,23 +149,14 @@ app.post("/webhook", async (req, res) => {
       }
     );
 
-    console.log(`Lead #${leadId} updated successfully`);
-    console.log("amoCRM response:", response.status);
+    console.log(`✅ Lead #${leadId} updated successfully`);
 
     return res.sendStatus(200);
 
   } catch (e) {
-    console.log("ERROR:", e.response?.data || e.message || e);
+    console.log("❌ ERROR:", e.response?.data || e.message || e);
     return res.sendStatus(200);
   }
-});
-
-// 🛡️ Catch-all для любых других запросов (для дебага)
-app.all("*", (req, res) => {
-  console.log(`Unknown request: ${req.method} ${req.path}`);
-  console.log("Headers:", req.headers);
-  console.log("Body:", req.body);
-  return res.sendStatus(200);
 });
 
 app.listen(PORT, () => {
