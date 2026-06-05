@@ -2,34 +2,28 @@ const express = require("express");
 const axios = require("axios");
 
 const app = express();
-app.use(express.json());
-
 const PORT = process.env.PORT || 3000;
 
+// ⚠️ ВАЖНО: middleware должен быть ПЕРЕД всеми роутами!
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ extended: true }));
+
 // категории
-const CATEGORY_A  = 974775;   // A. Смартфоны NEW—iPhone
-const CATEGORY_B  = 974777;   // B. Ориг. Аксы NEW—AirPods / Watch
-const CATEGORY_C  = 974779;   // C. Железо NEW — Mac / iPad / Dyson
-const CATEGORY_BU = 974781;   // Б/У
+const CATEGORY_A  = 974775;
+const CATEGORY_B  = 974777;
+const CATEGORY_C  = 974779;
+const CATEGORY_BU = 974781;
 
 // поля amoCRM
 const FIELD_TYPE     = 466253;
 const FIELD_MODEL    = 577689;
 const FIELD_CATEGORY = 575965;
 
-// типы запроса
-const TYPE_NEW = 931809;   // Покупка новой техники
-const TYPE_BU  = 938373;   // Покупка БУ техники
+const TYPE_NEW = 931809;
+const TYPE_BU  = 938373;
 
-// списки моделей
-const accessories = [
-  975967, 975969, 975971, 976049, 976051, 976053, 976055
-];
-
-const hardware = [
-  975973, 975975, 975977, 975981, 975983, 980173
-];
-
+const accessories = [975967, 975969, 975971, 976049, 976051, 976053, 976055];
+const hardware    = [975973, 975975, 975977, 975981, 975983, 980173];
 const smartphones = [
   975979, 976893, 975985, 975987, 975989, 975991,
   975993, 975995, 975997, 975999, 976001, 976003,
@@ -41,21 +35,13 @@ const smartphones = [
   979183, 981729, 981731, 981733, 981735, 982255
 ];
 
-// -------- вычисление категории --------
 function calcCategory(type, model) {
-  // БУ техника — всегда Б/У (974781)
-  if (type === TYPE_BU) {
-    return CATEGORY_BU;
-  }
-
-  // Новая техника
+  if (type === TYPE_BU) return CATEGORY_BU;
   if (type === TYPE_NEW) {
     if (accessories.includes(model)) return CATEGORY_B;
     if (hardware.includes(model))    return CATEGORY_C;
-    // Все остальное (смартфоны и прочее) → A
     return CATEGORY_A;
   }
-
   return null;
 }
 
@@ -64,27 +50,51 @@ app.get("/", (req, res) => {
   res.send("OK");
 });
 
+// 🔄 Verification webhook от amoCRM (GET запрос)
+app.get("/webhook", (req, res) => {
+  console.log("=== Verification GET webhook ===");
+  console.log("Query:", req.query);
+  console.log("Headers:", req.headers);
+  return res.sendStatus(200);
+});
+
 app.post("/webhook", async (req, res) => {
   try {
-    console.log("=== Webhook received ===");
-    console.log(JSON.stringify(req.body, null, 2));
+    console.log("=== Webhook POST received ===");
+    console.log("Headers:", JSON.stringify(req.headers, null, 2));
+    console.log("Content-Type:", req.headers["content-type"]);
+    console.log("Body:", JSON.stringify(req.body, null, 2));
+    console.log("Raw body type:", typeof req.body);
 
-    // amoCRM может присылать данные в разных форматах — пробуем несколько
-    const lead =
+    // 🛡️ Если тело пустое — это verification webhook, просто отвечаем 200
+    if (!req.body || Object.keys(req.body).length === 0) {
+      console.log("Empty body — verification webhook, skipping");
+      return res.sendStatus(200);
+    }
+
+    // Ищем лид в разных форматах
+    let lead =
       req.body?.leads?.update?.[0] ||
       req.body?.leads?.add?.[0]    ||
-      req.body;
+      req.body?.leads?.delete?.[0] ||
+      null;
+
+    // Если лид не в стандартном формате — может быть сам объект
+    if (!lead && req.body.id && req.body.custom_fields_values) {
+      lead = req.body;
+    }
 
     if (!lead || !lead.id) {
       console.log("Lead not found in payload");
+      console.log("Available keys:", Object.keys(req.body));
       return res.sendStatus(200);
     }
 
     const leadId = lead.id;
     const custom = lead.custom_fields_values || [];
 
-    let type = null;
-    let model = null;
+    let type     = null;
+    let model    = null;
     let category = null;
 
     custom.forEach(f => {
@@ -119,24 +129,26 @@ app.post("/webhook", async (req, res) => {
 
     const url = `https://${subdomain}.amocrm.ru/api/v4/leads/${leadId}`;
 
-    const payload = {
-      custom_fields_values: [
-        {
-          field_id: FIELD_CATEGORY,
-          values: [{ value: String(correct) }]
+    const response = await axios.patch(
+      url,
+      {
+        custom_fields_values: [
+          {
+            field_id: FIELD_CATEGORY,
+            values: [{ value: String(correct) }]
+          }
+        ]
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json"
         }
-      ]
-    };
-
-    const response = await axios.patch(url, payload, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json"
       }
-    });
+    );
 
     console.log(`Lead #${leadId} updated successfully`);
-    console.log("amoCRM response:", response.status, response.data);
+    console.log("amoCRM response:", response.status);
 
     return res.sendStatus(200);
 
@@ -144,6 +156,14 @@ app.post("/webhook", async (req, res) => {
     console.log("ERROR:", e.response?.data || e.message || e);
     return res.sendStatus(200);
   }
+});
+
+// 🛡️ Catch-all для любых других запросов (для дебага)
+app.all("*", (req, res) => {
+  console.log(`Unknown request: ${req.method} ${req.path}`);
+  console.log("Headers:", req.headers);
+  console.log("Body:", req.body);
+  return res.sendStatus(200);
 });
 
 app.listen(PORT, () => {
