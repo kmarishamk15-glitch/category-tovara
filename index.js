@@ -7,8 +7,7 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 
-// 🔥 Версия кода для проверки деплоя
-const CODE_VERSION = "2.1.0";
+const CODE_VERSION = "2.2.0";
 
 console.log("=".repeat(50));
 console.log(`Starting server v${CODE_VERSION}`);
@@ -96,9 +95,6 @@ app.post("/webhook", async (req, res) => {
 
     if (!token) {
       console.log("❌ Missing AMO_ACCESS_TOKEN");
-      console.log("Environment variables at runtime:");
-      console.log("  AMO_SUBDOMAIN:", process.env.AMO_SUBDOMAIN || "NOT SET");
-      console.log("  AMO_ACCESS_TOKEN:", process.env.AMO_ACCESS_TOKEN ? "SET" : "NOT SET");
       return res.sendStatus(200);
     }
 
@@ -130,18 +126,17 @@ app.post("/webhook", async (req, res) => {
     let model    = null;
     let category = null;
 
+    // 🔥 ИСПРАВЛЕНИЕ: берём enum_id для полей-списков
     custom.forEach(f => {
       if (f.field_id === FIELD_TYPE && f.values?.[0]) {
-        const val = f.values[0].value ?? f.values[0].enum_id;
-        type = Number(val);
+        // enum_id для списков, value для текстовых полей
+        type = f.values[0].enum_id || Number(f.values[0].value);
       }
       if (f.field_id === FIELD_MODEL && f.values?.[0]) {
-        const val = f.values[0].value ?? f.values[0].enum_id;
-        model = Number(val);
+        model = f.values[0].enum_id || Number(f.values[0].value);
       }
       if (f.field_id === FIELD_CATEGORY && f.values?.[0]) {
-        const val = f.values[0].value ?? f.values[0].enum_id;
-        category = Number(val);
+        category = f.values[0].enum_id || Number(f.values[0].value);
       }
     });
 
@@ -155,7 +150,7 @@ app.post("/webhook", async (req, res) => {
     }
 
     if (correct === category) {
-      console.log(`Category already correct (${correct})`);
+      console.log(`✅ Category already correct (${correct})`);
       return res.sendStatus(200);
     }
 
