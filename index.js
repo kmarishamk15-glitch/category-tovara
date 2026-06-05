@@ -4,9 +4,18 @@ const axios = require("axios");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ⚠️ ВАЖНО: middleware ПЕРЕД роутами
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
+
+// 🔥 Версия кода для проверки деплоя
+const CODE_VERSION = "2.1.0";
+
+console.log("=".repeat(50));
+console.log(`Starting server v${CODE_VERSION}`);
+console.log(`PORT: ${PORT}`);
+console.log(`AMO_SUBDOMAIN: ${process.env.AMO_SUBDOMAIN || "NOT SET"}`);
+console.log(`AMO_ACCESS_TOKEN: ${process.env.AMO_ACCESS_TOKEN ? "SET (length: " + process.env.AMO_ACCESS_TOKEN.length + ")" : "NOT SET"}`);
+console.log("=".repeat(50));
 
 // категории
 const CATEGORY_A  = 974775;
@@ -45,9 +54,8 @@ function calcCategory(type, model) {
   return null;
 }
 
-// -------- роуты --------
 app.get("/", (req, res) => {
-  res.send("OK");
+  res.send(`OK v${CODE_VERSION}`);
 });
 
 app.get("/webhook", (req, res) => {
@@ -58,16 +66,15 @@ app.get("/webhook", (req, res) => {
 app.post("/webhook", async (req, res) => {
   try {
     console.log("=== Webhook POST received ===");
+    console.log(`Code version: ${CODE_VERSION}`);
+    console.log(`Timestamp: ${new Date().toISOString()}`);
 
-    // Пустое тело — verification
     if (!req.body || Object.keys(req.body).length === 0) {
       console.log("Empty body — verification webhook");
       return res.sendStatus(200);
     }
 
-    // Ищем лид
     const lead = req.body?.leads?.update?.[0] || req.body?.leads?.add?.[0];
-
     if (!lead || !lead.id) {
       console.log("Lead not found in payload");
       return res.sendStatus(200);
@@ -76,45 +83,69 @@ app.post("/webhook", async (req, res) => {
     const leadId = lead.id;
     console.log(`Processing lead #${leadId}`);
 
-    const subdomain = process.env.AMO_SUBDOMAIN;
-    const token     = process.env.AMO_ACCESS_TOKEN;
+    const subdomain = process.env.AMO_SUBDOMAIN || req.body?.account?.subdomain;
+    const token = process.env.AMO_ACCESS_TOKEN;
 
-    if (!subdomain || !token) {
-      console.log("Missing env vars: AMO_SUBDOMAIN or AMO_ACCESS_TOKEN");
+    console.log(`Subdomain: ${subdomain || "NOT FOUND"}`);
+    console.log(`Token: ${token ? "PRESENT" : "MISSING"}`);
+
+    if (!subdomain) {
+      console.log("❌ No subdomain found");
       return res.sendStatus(200);
     }
 
-    // 🔥 ПОЛУЧАЕМ ПОЛНУЮ СДЕЛКУ ЧЕРЕЗ API (с кастомными полями)
+    if (!token) {
+      console.log("❌ Missing AMO_ACCESS_TOKEN");
+      console.log("Environment variables at runtime:");
+      console.log("  AMO_SUBDOMAIN:", process.env.AMO_SUBDOMAIN || "NOT SET");
+      console.log("  AMO_ACCESS_TOKEN:", process.env.AMO_ACCESS_TOKEN ? "SET" : "NOT SET");
+      return res.sendStatus(200);
+    }
+
+    // Получаем полную сделку с кастомными полями
     const url = `https://${subdomain}.amocrm.ru/api/v4/leads/${leadId}`;
-    
-    console.log(`Fetching lead details from ${url}`);
-    
+    console.log(`Fetching lead from: ${url}`);
+
     const response = await axios.get(url, {
       headers: {
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/json"
       },
       params: {
-        with: "custom_fields_values" // Запрашиваем кастомные поля
+        with: "custom_fields_values"
       }
     });
 
     const fullLead = response.data;
     const custom = fullLead.custom_fields_values || [];
 
-    console.log("Custom fields count:", custom.length);
+    console.log(`Custom fields count: ${custom.length}`);
+
+    // Логируем все поля
+    custom.forEach(f => {
+      console.log(`  field_id=${f.field_id} | name="${f.field_name}" | values=${JSON.stringify(f.values)}`);
+    });
 
     let type     = null;
     let model    = null;
     let category = null;
 
     custom.forEach(f => {
-      if (f.field_id === FIELD_TYPE     && f.values?.[0]) type     = Number(f.values[0].value);
-      if (f.field_id === FIELD_MODEL    && f.values?.[0]) model    = Number(f.values[0].value);
-      if (f.field_id === FIELD_CATEGORY && f.values?.[0]) category = Number(f.values[0].value);
+      if (f.field_id === FIELD_TYPE && f.values?.[0]) {
+        const val = f.values[0].value ?? f.values[0].enum_id;
+        type = Number(val);
+      }
+      if (f.field_id === FIELD_MODEL && f.values?.[0]) {
+        const val = f.values[0].value ?? f.values[0].enum_id;
+        model = Number(val);
+      }
+      if (f.field_id === FIELD_CATEGORY && f.values?.[0]) {
+        const val = f.values[0].value ?? f.values[0].enum_id;
+        category = Number(val);
+      }
     });
 
-    console.log(`Lead #${leadId} | type=${type} | model=${model} | category=${category}`);
+    console.log(`Parsed → type=${type} | model=${model} | category=${category}`);
 
     const correct = calcCategory(type, model);
 
@@ -124,13 +155,12 @@ app.post("/webhook", async (req, res) => {
     }
 
     if (correct === category) {
-      console.log(`Category already correct (${correct}) — nothing to do`);
+      console.log(`Category already correct (${correct})`);
       return res.sendStatus(200);
     }
 
-    console.log(`Updating category: ${category} → ${correct}`);
+    console.log(`🔄 Updating category: ${category} → ${correct}`);
 
-    // Обновляем сделку
     await axios.patch(
       url,
       {
@@ -150,7 +180,6 @@ app.post("/webhook", async (req, res) => {
     );
 
     console.log(`✅ Lead #${leadId} updated successfully`);
-
     return res.sendStatus(200);
 
   } catch (e) {
