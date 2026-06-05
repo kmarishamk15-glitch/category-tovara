@@ -162,7 +162,12 @@ app.post("/webhook", async (req, res) => {
         custom_fields_values: [
           {
             field_id: FIELD_CATEGORY,
-            values: [{ enum_id: correct }]  // ✅ enum_id вместо value
+            values: [
+              {
+                value: String(correct),
+                enum_id: correct
+              }
+            ]
           }
         ]
       },
