@@ -89,8 +89,8 @@ app.post("/webhook", async (req, res) => {
 
     // -------- обновление сделки --------
 
-    const subdomain = "YOUR_SUBDOMAIN";
-    const token = "YOUR_ACCESS_TOKEN";
+    const subdomain = process.env.AMO_SUBDOMAIN;
+    const token = process.env.AMO_ACCESS_TOKEN;
 
     await axios.patch(
       `https://${subdomain}.amocrm.ru/api/v4/leads/${leadId}`,
