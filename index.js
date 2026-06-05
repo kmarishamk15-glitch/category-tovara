@@ -7,7 +7,7 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 
-const CODE_VERSION = "2.2.0";
+const CODE_VERSION = "2.3.0";
 
 console.log("=".repeat(50));
 console.log(`Starting server v${CODE_VERSION}`);
@@ -126,10 +126,9 @@ app.post("/webhook", async (req, res) => {
     let model    = null;
     let category = null;
 
-    // 🔥 ИСПРАВЛЕНИЕ: берём enum_id для полей-списков
+    // Берём enum_id для полей-списков
     custom.forEach(f => {
       if (f.field_id === FIELD_TYPE && f.values?.[0]) {
-        // enum_id для списков, value для текстовых полей
         type = f.values[0].enum_id || Number(f.values[0].value);
       }
       if (f.field_id === FIELD_MODEL && f.values?.[0]) {
@@ -156,13 +155,14 @@ app.post("/webhook", async (req, res) => {
 
     console.log(`🔄 Updating category: ${category} → ${correct}`);
 
+    // 🔥 ИСПРАВЛЕНИЕ: передаём value как ЧИСЛО, а не строку
     await axios.patch(
       url,
       {
         custom_fields_values: [
           {
             field_id: FIELD_CATEGORY,
-            values: [{ value: String(correct) }]
+            values: [{ value: correct }]  // ✅ Число, не строка
           }
         ]
       },
