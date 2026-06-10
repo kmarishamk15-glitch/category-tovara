@@ -110,7 +110,12 @@ const RULES = [
     }
 
 ];
-
+const SKIP_DATE_CHANGE = {
+    typeField: 466253,
+    typeValue: 978137,
+    reasonField: 573457,
+    reasonValue: 976779
+};
 /*
 ========================================
 🚫 ИСКЛЮЧЕНИЯ ДЛЯ СМЕНЫ ДАТЫ
