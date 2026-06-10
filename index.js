@@ -110,12 +110,7 @@ const RULES = [
     }
 
 ];
-const SKIP_DATE_CHANGE = {
-    typeField: 466253,
-    typeValue: 978137,
-    reasonField: 573457,
-    reasonValue: 976779
-};
+
 /*
 ========================================
 🚫 ИСКЛЮЧЕНИЯ ДЛЯ СМЕНЫ ДАТЫ
@@ -332,11 +327,11 @@ app.post('/webhook', async (req, res) => {
 
         /*
         ПРОВЕРЯЕМ: нужно ли менять дату?
-        
+
         Если в сделке установлены:
         - Поле 466253 (Тип запроса) = 978137 (нецелевой/техника)
         - Поле 573457 (Причина отказа) = 976779 (нецелевой ндз>3)
-        
+
         ТО дату НЕ меняем
         */
 
@@ -364,11 +359,11 @@ app.post('/webhook', async (req, res) => {
 
             for (const field of customFields) {
 
-                if (field.field_id === SKIP_DATE_CHANGE.typeField) {
+                if (field.field_id === 466253) {
                     typeValue = field.values?.[0]?.enum_id;
                 }
 
-                if (field.field_id === SKIP_DATE_CHANGE.reasonField) {
+                if (field.field_id === 573457) {
                     reasonValue = field.values?.[0]?.enum_id;
                 }
             }
@@ -377,8 +372,8 @@ app.post('/webhook', async (req, res) => {
             console.log('Reason field value:', reasonValue);
 
             if (
-                typeValue === SKIP_DATE_CHANGE.typeValue &&
-                reasonValue === SKIP_DATE_CHANGE.reasonValue
+                typeValue === 978137 &&
+                reasonValue === 976779
             ) {
                 skipDateChange = true;
                 console.log('⏭️ Skip date change: non-target lead');
@@ -397,7 +392,7 @@ app.post('/webhook', async (req, res) => {
 
         if (!skipDateChange) {
 
-            const now = Math.floor(Date.now() / 1000); // Текущая дата в Unix timestamp
+            const now = Math.floor(Date.now() / 1000);
 
             await axios.patch(
                 `https://${process.env.AMO_DOMAIN}/api/v4/leads/${leadId}`,
