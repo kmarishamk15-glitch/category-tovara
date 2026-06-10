@@ -1,133 +1,451 @@
-const express = require("express");
-const axios = require("axios");
+require('dotenv').config();
+
+const express = require('express');
+const axios = require('axios');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
 
-app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
+app.use(express.json());
 
-const CODE_VERSION = "2.5.0";
+/*
+========================================
+🔧 ПРАВИЛА ПЕРЕХОДОВ
+========================================
 
-// категории
-const CATEGORY_A  = 974775;
-const CATEGORY_B  = 974777;
-const CATEGORY_C  = 974779;
-const CATEGORY_BU = 974781;
+Логика:
 
-// поля amoCRM
-const FIELD_TYPE     = 466253;
-const FIELD_MODEL    = 577689;
-const FIELD_CATEGORY = 575965;
+ЕСЛИ сделка перенесена:
 
-// типы
-const TYPE_NEW = 931809;
-const TYPE_BU  = 938373;
+ИЗ:
+- определенной воронки
+- определенного этапа
 
-// аксессуары / железо / смартфоны
-const accessories = [975967,975969,975971,976049,976051,976053,976055];
+В:
+- определенную воронку
+- один из определенных этапов
 
-const hardware = [975973,975975,975977,975981,975983,980173];
+ТО:
+→ меняем ответственного
+на того, кто передвинул сделку
 
-const smartphones = [
-  975979,976893,975985,975987,975989,975991,
-  975993,975995,975997,975999,976001,976003,
-  976005,976007,976009,976011,976013,976015,
-  976017,976019,976021,976023,976025,976027,
-  976029,976031,976033,976035,976037,976039,
-  976041,976043,976045,976047,976887,976889,
-  976891,977077,978049,978051,978053,978055,
-  979183,981729,981731,981733,981735,982255
-];
+========================================
+КАК ДОБАВЛЯТЬ ПРАВИЛА
+========================================
 
-function calcCategory(type, model) {
-  if (type === TYPE_BU) return CATEGORY_BU;
+{
+    from: {
+        pipeline: ID_ВОРОНКИ_ИЗ,
+        status: ID_ЭТАПА_ИЗ
+    },
 
-  if (type === TYPE_NEW) {
-    if (accessories.includes(model)) return CATEGORY_B;
-    if (hardware.includes(model)) return CATEGORY_C;
-    return CATEGORY_A;
-  }
-
-  return null;
+    to: {
+        pipeline: ID_ВОРОНКИ_КУДА,
+        status: [
+            ID_ЭТАПА_1,
+            ID_ЭТАПА_2
+        ]
+    }
 }
 
-app.get("/", (req, res) => {
-  res.send("OK v" + CODE_VERSION);
-});
+*/
 
-app.post("/webhook", async (req, res) => {
-  try {
-    const lead = req.body?.leads?.update?.[0] || req.body?.leads?.add?.[0];
+const RULES = [
 
-    if (!lead?.id) return res.sendStatus(200);
+    /*
+    ========================================
+    ИЗ:
+    Воронка 5240944
+    Этап 47069740
 
-    const leadId = lead.id;
+    В:
+    Воронка 5276629
+    Несколько этапов
+    ========================================
+    */
 
-    const subdomain = process.env.AMO_SUBDOMAIN;
-    const token = process.env.AMO_ACCESS_TOKEN;
+    {
+        from: {
+            pipeline: 5240944,
+            status: 47069740
+        },
 
-    if (!subdomain || !token) return res.sendStatus(200);
+        to: {
+            pipeline: 5276629,
+            status: [
+                47054479,
+                53410254,
+                53780378,
+                53410258,
+                143,
+                142
+            ]
+        }
+    },
 
-    // получаем полные данные сделки
-    const url = `https://${subdomain}.amocrm.ru/api/v4/leads/${leadId}`;
+    /*
+    ========================================
+    ИЗ:
+    Воронка 5240944
+    Этап 47069740
 
-    const response = await axios.get(url, {
-      headers: { Authorization: `Bearer ${token}` },
-      params: { with: "custom_fields_values" }
-    });
+    В:
+    Воронка 5240944
+    Этап 143
+    ========================================
+    */
 
-    const custom = response.data.custom_fields_values || [];
+    {
+        from: {
+            pipeline: 5240944,
+            status: 47069740
+        },
 
-    let type = null;
-    let model = null;
-    let category = null;
-
-    for (const f of custom) {
-      const val = f.values?.[0];
-
-      if (!val) continue;
-
-      if (f.field_id === FIELD_TYPE) type = val.enum_id;
-      if (f.field_id === FIELD_MODEL) model = val.enum_id;
-      if (f.field_id === FIELD_CATEGORY) category = val.enum_id;
+        to: {
+            pipeline: 5240944,
+            status: [
+                143
+            ]
+        }
     }
 
-    const correct = calcCategory(type, model);
+];
 
-    if (!correct) return res.sendStatus(200);
+/*
+========================================
+🚫 ИСКЛЮЧЕНИЯ ДЛЯ СМЕНЫ ДАТЫ
+========================================
 
-    if (correct === category) return res.sendStatus(200);
+Если в сделке установлены:
+- Поле 466253 (Тип запроса) = 978137 (нецелевой/техника)
+- Поле 573457 (Причина отказа) = 976779 (нецелевой ндз>3)
 
-    console.log(`Updating ${category} → ${correct}`);
+ТО:
+→ меняем ТОЛЬКО ответственного
+→ дату НЕ меняем
 
-    // 🔥 ВАЖНО: правильный PATCH для amoCRM enum поля
-    await axios.patch(url, {
-      custom_fields_values: [
-        {
-          field_id: FIELD_CATEGORY,
-          values: [
-            {
-              enum_id: correct
-            }
-          ]
-        }
-      ]
-    }, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json"
-      }
-    });
+*/
 
-    return res.sendStatus(200);
+const SKIP_DATE_CHANGE = {
+    typeField: 466253,
+    typeValue: 978137,
+    reasonField: 573457,
+    reasonValue: 976779
+};
 
-  } catch (e) {
-    console.log("ERROR:", e.response?.data || e.message);
-    return res.sendStatus(200);
-  }
+/*
+========================================
+🌐 Проверка работы
+========================================
+*/
+
+app.get('/webhook', (req, res) => {
+
+    res.status(200).send('Webhook works');
+
 });
 
+app.get('/', (req, res) => {
+
+    res.status(200).send('AmoCRM Bot is running');
+
+});
+
+/*
+========================================
+📥 WEBHOOK
+========================================
+*/
+
+app.post('/webhook', async (req, res) => {
+
+    try {
+
+        console.log('======================');
+        console.log('📥 NEW WEBHOOK');
+        console.log('======================');
+
+        console.log(JSON.stringify(req.body, null, 2));
+
+        /*
+        Берем ТОЛЬКО событие смены этапа
+        */
+
+        const lead = req.body.leads?.status?.[0];
+
+        /*
+        Не смена этапа?
+        Игнорируем
+        */
+
+        if (!lead) {
+
+            console.log('⏭️ Not a status event');
+
+            return res.sendStatus(200);
+        }
+
+        /*
+        Данные сделки
+        */
+
+        const leadId = Number(lead.id);
+
+        const pipelineId = Number(lead.pipeline_id);
+
+        const newStatusId = Number(lead.status_id);
+
+        const oldStatusId = Number(lead.old_status_id);
+
+        /*
+        Иногда amoCRM не присылает old_pipeline_id.
+        Поэтому можно указать fallback.
+        */
+
+        const oldPipelineId = Number(
+            lead.old_pipeline_id || 5240944
+        );
+
+        /*
+        Кто передвинул сделку
+        */
+
+        const userId = Number(
+            lead.modified_user_id ||
+            lead.modified_by ||
+            lead.updated_by
+        );
+
+        /*
+        Текущий ответственный
+        */
+
+        const currentResponsible = Number(
+            lead.responsible_user_id
+        );
+
+        console.log('Lead ID:', leadId);
+        console.log('Old Pipeline:', oldPipelineId);
+        console.log('Old Status:', oldStatusId);
+        console.log('New Pipeline:', pipelineId);
+        console.log('New Status:', newStatusId);
+        console.log('User ID:', userId);
+
+        /*
+        Проверяем:
+        этап реально изменился?
+        */
+
+        if (!oldStatusId) {
+
+            console.log('⏭️ No old status');
+
+            return res.sendStatus(200);
+        }
+
+        if (oldStatusId === newStatusId) {
+
+            console.log('⏭️ Same status');
+
+            return res.sendStatus(200);
+        }
+
+        /*
+        Ищем подходящее правило
+        */
+
+        const matchedRule = RULES.find(rule => {
+
+            const fromMatches =
+                rule.from.pipeline === oldPipelineId &&
+                rule.from.status === oldStatusId;
+
+            const toMatches =
+                rule.to.pipeline === pipelineId &&
+                rule.to.status.includes(newStatusId);
+
+            return fromMatches && toMatches;
+
+        });
+
+        /*
+        Нет подходящего правила
+        */
+
+        if (!matchedRule) {
+
+            console.log('⏭️ No matching rule');
+
+            return res.sendStatus(200);
+        }
+
+        /*
+        Нет пользователя?
+        */
+
+        if (!userId) {
+
+            console.log('⏭️ No user ID');
+
+            return res.sendStatus(200);
+        }
+
+        /*
+        Уже нужный ответственный?
+        */
+
+        if (currentResponsible === userId) {
+
+            console.log('⏭️ Responsible already correct');
+
+            return res.sendStatus(200);
+        }
+
+        /*
+        Меняем ответственного
+        */
+
+        console.log(
+            `✅ Updating responsible: ${currentResponsible} → ${userId}`
+        );
+
+        await axios.patch(
+            `https://${process.env.AMO_DOMAIN}/api/v4/leads/${leadId}`,
+            {
+                responsible_user_id: userId
+            },
+            {
+                headers: {
+                    Authorization: `Bearer ${process.env.AMO_TOKEN}`,
+                    'Content-Type': 'application/json',
+                    Accept: 'application/json'
+                }
+            }
+        );
+
+        console.log('✅ Responsible updated');
+
+        /*
+        ПРОВЕРЯЕМ: нужно ли менять дату?
+        
+        Если в сделке установлены:
+        - Поле 466253 (Тип запроса) = 978137 (нецелевой/техника)
+        - Поле 573457 (Причина отказа) = 976779 (нецелевой ндз>3)
+        
+        ТО дату НЕ меняем
+        */
+
+        let skipDateChange = false;
+
+        try {
+
+            const leadResponse = await axios.get(
+                `https://${process.env.AMO_DOMAIN}/api/v4/leads/${leadId}`,
+                {
+                    headers: {
+                        Authorization: `Bearer ${process.env.AMO_TOKEN}`,
+                        Accept: 'application/json'
+                    },
+                    params: {
+                        with: 'custom_fields_values'
+                    }
+                }
+            );
+
+            const customFields = leadResponse.data.custom_fields_values || [];
+
+            let typeValue = null;
+            let reasonValue = null;
+
+            for (const field of customFields) {
+
+                if (field.field_id === SKIP_DATE_CHANGE.typeField) {
+                    typeValue = field.values?.[0]?.enum_id;
+                }
+
+                if (field.field_id === SKIP_DATE_CHANGE.reasonField) {
+                    reasonValue = field.values?.[0]?.enum_id;
+                }
+            }
+
+            console.log('Type field value:', typeValue);
+            console.log('Reason field value:', reasonValue);
+
+            if (
+                typeValue === SKIP_DATE_CHANGE.typeValue &&
+                reasonValue === SKIP_DATE_CHANGE.reasonValue
+            ) {
+                skipDateChange = true;
+                console.log('⏭️ Skip date change: non-target lead');
+            }
+
+        } catch (error) {
+
+            console.log('⚠️ Error fetching lead fields:', error.message);
+            console.log('⚠️ Will update date anyway');
+        }
+
+        /*
+        МЕНЯЕМ ДАТУ СОЗДАНИЯ СДЕЛКИ НА СЕГОДНЯ
+        (если не исключение)
+        */
+
+        if (!skipDateChange) {
+
+            const now = Math.floor(Date.now() / 1000); // Текущая дата в Unix timestamp
+
+            await axios.patch(
+                `https://${process.env.AMO_DOMAIN}/api/v4/leads/${leadId}`,
+                {
+                    created_at: now
+                },
+                {
+                    headers: {
+                        Authorization: `Bearer ${process.env.AMO_TOKEN}`,
+                        'Content-Type': 'application/json',
+                        Accept: 'application/json'
+                    }
+                }
+            );
+
+            console.log('✅ Creation date updated to today');
+
+        } else {
+
+            console.log('⏭️ Date not changed (exception)');
+        }
+
+        return res.sendStatus(200);
+
+    } catch (error) {
+
+        console.log('❌ ERROR');
+
+        if (error.response) {
+
+            console.log('Status:', error.response.status);
+            console.log('Data:', error.response.data);
+
+        } else {
+
+            console.log(error.message);
+
+        }
+
+        return res.sendStatus(500);
+    }
+});
+
+/*
+========================================
+🚀 СТАРТ СЕРВЕРА
+========================================
+*/
+
+const PORT = process.env.PORT || 3000;
+
 app.listen(PORT, () => {
-  console.log("running on " + PORT);
+
+    console.log(`🚀 Server started on port ${PORT}`);
+
 });
